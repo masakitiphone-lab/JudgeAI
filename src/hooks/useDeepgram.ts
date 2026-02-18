@@ -2,12 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import {
-  DEEPGRAM_QUERY_PARAMS_PRIMARY,
-  DEEPGRAM_QUERY_PARAMS_SAFE,
-} from "@/lib/constants";
-import { SpeakerNames, Utterance } from "@/lib/types";
-import { buildDeepgramWebSocketUrl, groupWordsToUtterances } from "@/lib/utils";
+import { DeepgramWord, SpeakerNames, Utterance } from "@/lib/types";
+import { groupWordsToUtterances } from "@/lib/utils";
 
 type UseDeepgramOptions = {
   sessionToken: string | null;
@@ -15,11 +11,18 @@ type UseDeepgramOptions = {
   onAppendUtterances: (utterances: Utterance[]) => void;
 };
 
-const MAX_RECONNECT_ATTEMPTS = 3;
+type DeepgramProxyResponse = {
+  results?: {
+    channels?: Array<{
+      alternatives?: Array<{
+        words?: DeepgramWord[];
+      }>;
+    }>;
+  };
+  error?: string;
+};
 
-function isFatalCloseCode(code: number): boolean {
-  return code === 1002 || code === 1003 || code === 1007 || code === 1008;
-}
+const CHUNK_MS = 2500;
 
 export function useDeepgram({
   sessionToken,
@@ -31,22 +34,12 @@ export function useDeepgram({
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
-  const socketRef = useRef<WebSocket | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const workletRef = useRef<AudioWorkletNode | null>(null);
-  const silentGainRef = useRef<GainNode | null>(null);
-  const keepAliveIntervalRef = useRef<number | null>(null);
   const timerIntervalRef = useRef<number | null>(null);
-  const shouldReconnectRef = useRef(false);
-  const manualStopRef = useRef(false);
-  const reconnectAttemptsRef = useRef(0);
   const speakerNamesRef = useRef(speakerNames);
   const appendRef = useRef(onAppendUtterances);
-  const openedRef = useRef(false);
-  const safeModeRef = useRef(false);
-  const hadSocketErrorRef = useRef(false);
+  const isStoppingRef = useRef(false);
 
   useEffect(() => {
     speakerNamesRef.current = speakerNames;
@@ -56,291 +49,135 @@ export function useDeepgram({
     appendRef.current = onAppendUtterances;
   }, [onAppendUtterances]);
 
-  const clearIntervals = useCallback(() => {
-    if (keepAliveIntervalRef.current) {
-      window.clearInterval(keepAliveIntervalRef.current);
-      keepAliveIntervalRef.current = null;
-    }
+  const clearTimer = useCallback(() => {
     if (timerIntervalRef.current) {
       window.clearInterval(timerIntervalRef.current);
       timerIntervalRef.current = null;
     }
   }, []);
 
-  const cleanupAudio = useCallback(async () => {
-    sourceRef.current?.disconnect();
-    workletRef.current?.disconnect();
-    silentGainRef.current?.disconnect();
-
+  const cleanup = useCallback(async () => {
+    clearTimer();
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+    }
+    mediaRecorderRef.current = null;
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
     mediaStreamRef.current = null;
+    setInterimText("");
+  }, [clearTimer]);
 
-    if (audioContextRef.current) {
-      await audioContextRef.current.close().catch(() => undefined);
-      audioContextRef.current = null;
-    }
+  const transcribeChunk = useCallback(
+    async (blob: Blob) => {
+      if (!sessionToken || blob.size === 0 || isStoppingRef.current) return;
 
-    sourceRef.current = null;
-    workletRef.current = null;
-    silentGainRef.current = null;
-  }, []);
+      const response = await fetch("/api/deepgram-proxy", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${sessionToken}`,
+          "Content-Type": blob.type || "audio/webm",
+        },
+        body: blob,
+      });
 
-  const cleanupSocket = useCallback((sendCloseStream: boolean) => {
-    const ws = socketRef.current;
-    if (!ws) return;
-
-    try {
-      if (sendCloseStream && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "CloseStream" }));
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as
+          | { error?: string; detail?: string }
+          | null;
+        const detail = data?.detail ? ` (${data.detail})` : "";
+        throw new Error((data?.error || "文字起こしに失敗しました") + detail);
       }
-    } catch {
-      // ignore
-    }
 
-    if (
-      ws.readyState === WebSocket.OPEN ||
-      ws.readyState === WebSocket.CONNECTING
-    ) {
-      ws.close();
-    }
-    socketRef.current = null;
-  }, []);
+      const data = (await response.json()) as DeepgramProxyResponse;
+      const words =
+        data.results?.channels?.[0]?.alternatives?.[0]?.words || [];
+      if (!words.length) return;
 
-  const cleanupAll = useCallback(
-    async (sendCloseStream: boolean) => {
-      clearIntervals();
-      cleanupSocket(sendCloseStream);
-      await cleanupAudio();
-      setInterimText("");
+      const utterances = groupWordsToUtterances(words, speakerNamesRef.current);
+      if (utterances.length > 0) {
+        appendRef.current(utterances);
+      }
     },
-    [cleanupAudio, cleanupSocket, clearIntervals],
+    [sessionToken],
   );
 
-  const connect = useCallback(async function connectInternal() {
+  const startRecording = useCallback(async () => {
+    if (isRecording) return;
     if (!sessionToken) {
       setError("セッションが無効です。再ログインしてください。");
       return;
     }
 
-    let tokenData: { token: string };
     try {
-      const tokenResponse = await fetch("/api/deepgram-token", {
-        headers: {
-          Authorization: `Bearer ${sessionToken}`,
+      isStoppingRef.current = false;
+      setError(null);
+      setElapsedSeconds(0);
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
         },
       });
+      mediaStreamRef.current = stream;
 
-      if (!tokenResponse.ok) {
-        const data = (await tokenResponse.json().catch(() => null)) as
-          | { error?: string }
-          | null;
-        setError(data?.error || "Deepgramトークン取得に失敗しました");
-        return;
-      }
-      tokenData = (await tokenResponse.json()) as { token: string };
-    } catch {
-      setError("Deepgramトークン取得でネットワークエラーが発生しました");
-      return;
-    }
+      const mimeType =
+        MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+          ? "audio/webm;codecs=opus"
+          : "audio/webm";
+      const recorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = recorder;
 
-    const queryParams = safeModeRef.current
-      ? DEEPGRAM_QUERY_PARAMS_SAFE
-      : DEEPGRAM_QUERY_PARAMS_PRIMARY;
-
-    const ws = new WebSocket(buildDeepgramWebSocketUrl(tokenData.token, queryParams));
-    ws.binaryType = "arraybuffer";
-    socketRef.current = ws;
-    openedRef.current = false;
-    hadSocketErrorRef.current = false;
-
-    ws.onopen = async () => {
-      openedRef.current = true;
-      setError(null);
-      reconnectAttemptsRef.current = 0;
-
-      try {
-        const mediaStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-        });
-        mediaStreamRef.current = mediaStream;
-
-        const audioContext = new AudioContext({ sampleRate: 48_000 });
-        audioContextRef.current = audioContext;
-        await audioContext.audioWorklet.addModule("/resample-processor.js");
-
-        const source = audioContext.createMediaStreamSource(mediaStream);
-        const worklet = new AudioWorkletNode(audioContext, "resample-processor");
-        const silentGain = audioContext.createGain();
-        silentGain.gain.value = 0;
-
-        source.connect(worklet);
-        worklet.connect(silentGain);
-        silentGain.connect(audioContext.destination);
-
-        sourceRef.current = source;
-        workletRef.current = worklet;
-        silentGainRef.current = silentGain;
-
-        worklet.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(event.data);
-          }
-        };
-
-        keepAliveIntervalRef.current = window.setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "KeepAlive" }));
-          }
-        }, 8_000);
-
-        timerIntervalRef.current = window.setInterval(() => {
-          setElapsedSeconds((prev) => prev + 1);
-        }, 1_000);
-
-        setIsRecording(true);
-      } catch {
-        shouldReconnectRef.current = false;
-        setError("マイク初期化に失敗しました。権限を確認してください。");
-        await cleanupAll(false);
-      }
-    };
-
-    ws.onmessage = (event: MessageEvent<string>) => {
-      let payload: unknown;
-      try {
-        payload = JSON.parse(event.data);
-      } catch {
-        return;
-      }
-
-      if (
-        typeof payload === "object" &&
-        payload !== null &&
-        "type" in payload &&
-        (payload as { type?: string }).type === "Error"
-      ) {
-        const message =
-          (payload as { description?: string; message?: string }).description ||
-          (payload as { description?: string; message?: string }).message ||
-          "不明なエラー";
-        shouldReconnectRef.current = false;
-        setError(`Deepgramエラー: ${message}`);
-        ws.close();
-        return;
-      }
-
-      const resultPayload = payload as {
-        type?: string;
-        is_final?: boolean;
-        channel?: {
-          alternatives?: Array<{ transcript?: string; words?: unknown[] }>;
-        };
+      recorder.ondataavailable = async (event: BlobEvent) => {
+        if (!event.data || event.data.size === 0) return;
+        try {
+          await transcribeChunk(event.data);
+        } catch (chunkError) {
+          const message =
+            chunkError instanceof Error
+              ? chunkError.message
+              : "文字起こしでエラーが発生しました。";
+          setError(message);
+        }
       };
-      if (resultPayload.type !== "Results") return;
 
-      const alt = resultPayload.channel?.alternatives?.[0];
-      if (!alt) return;
+      recorder.onerror = () => {
+        setError("録音中にエラーが発生しました。");
+      };
 
-      if (resultPayload.is_final) {
-        const utterances = groupWordsToUtterances(
-          (alt.words as Parameters<typeof groupWordsToUtterances>[0]) || [],
-          speakerNamesRef.current,
-        );
-        if (utterances.length > 0) {
-          appendRef.current(utterances);
-        }
-        setInterimText("");
-      } else {
-        setInterimText(alt.transcript || "");
-      }
-    };
+      recorder.onstop = () => {
+        setIsRecording(false);
+        clearTimer();
+      };
 
-    ws.onerror = () => {
-      hadSocketErrorRef.current = true;
-    };
+      recorder.start(CHUNK_MS);
+      setIsRecording(true);
 
-    ws.onclose = (event: CloseEvent) => {
-      clearIntervals();
-      cleanupAudio().catch(() => undefined);
-      setIsRecording(false);
-      setInterimText("");
-
-      const closeDetail = `code=${event.code}${
-        event.reason ? ` reason=${event.reason}` : ""
-      }`;
-      const mode = safeModeRef.current ? "safe" : "primary";
-
-      if (!openedRef.current && !safeModeRef.current) {
-        safeModeRef.current = true;
-        setError(
-          `接続に失敗したため安全モードで再試行します (${closeDetail} mode=${mode})`,
-        );
-        window.setTimeout(() => {
-          connectInternal().catch(() => undefined);
-        }, 400);
-        return;
-      }
-
-      if (isFatalCloseCode(event.code)) {
-        shouldReconnectRef.current = false;
-        setError(`Deepgram接続が拒否されました (${closeDetail} mode=${mode})`);
-        return;
-      }
-
-      if (!manualStopRef.current && shouldReconnectRef.current) {
-        if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
-          reconnectAttemptsRef.current += 1;
-          setError(
-            `接続が切れたため再接続中 (${reconnectAttemptsRef.current}) [${closeDetail} mode=${mode}]`,
-          );
-          window.setTimeout(() => {
-            connectInternal().catch(() => undefined);
-          }, 1_500);
-        } else {
-          shouldReconnectRef.current = false;
-          setError(
-            `接続が不安定です。録音を再開してください。 (${closeDetail} mode=${mode} socketError=${hadSocketErrorRef.current})`,
-          );
-        }
-      }
-    };
-  }, [cleanupAll, cleanupAudio, clearIntervals, sessionToken]);
-
-  const startRecording = useCallback(async () => {
-    if (isRecording) return;
-
-    manualStopRef.current = false;
-    shouldReconnectRef.current = true;
-    reconnectAttemptsRef.current = 0;
-    safeModeRef.current = false;
-    setElapsedSeconds(0);
-    setError(null);
-
-    await cleanupAll(false);
-    await connect();
-  }, [cleanupAll, connect, isRecording]);
+      timerIntervalRef.current = window.setInterval(() => {
+        setElapsedSeconds((prev) => prev + 1);
+      }, 1000);
+    } catch {
+      await cleanup();
+      setError("マイク初期化に失敗しました。権限を確認してください。");
+    }
+  }, [cleanup, clearTimer, isRecording, sessionToken, transcribeChunk]);
 
   const stopRecording = useCallback(async () => {
-    manualStopRef.current = true;
-    shouldReconnectRef.current = false;
-    reconnectAttemptsRef.current = 0;
+    isStoppingRef.current = true;
     setIsRecording(false);
     setElapsedSeconds(0);
-    await cleanupAll(true);
-  }, [cleanupAll]);
+    await cleanup();
+  }, [cleanup]);
 
   useEffect(() => {
     return () => {
-      manualStopRef.current = true;
-      shouldReconnectRef.current = false;
-      cleanupAll(true).catch(() => undefined);
+      isStoppingRef.current = true;
+      cleanup().catch(() => undefined);
     };
-  }, [cleanupAll]);
+  }, [cleanup]);
 
   return {
     isRecording,
