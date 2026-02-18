@@ -47,6 +47,7 @@ export function useDeepgram({
   const appendRef = useRef(onAppendUtterances);
   const openedRef = useRef(false);
   const safeModeRef = useRef(false);
+  const hadSocketErrorRef = useRef(false);
 
   useEffect(() => {
     speakerNamesRef.current = speakerNames;
@@ -151,6 +152,7 @@ export function useDeepgram({
     ws.binaryType = "arraybuffer";
     socketRef.current = ws;
     openedRef.current = false;
+    hadSocketErrorRef.current = false;
 
     ws.onopen = async () => {
       openedRef.current = true;
@@ -260,7 +262,7 @@ export function useDeepgram({
     };
 
     ws.onerror = () => {
-      setError("音声ストリーム接続でエラーが発生しました。");
+      hadSocketErrorRef.current = true;
     };
 
     ws.onclose = (event: CloseEvent) => {
@@ -272,10 +274,13 @@ export function useDeepgram({
       const closeDetail = `code=${event.code}${
         event.reason ? ` reason=${event.reason}` : ""
       }`;
+      const mode = safeModeRef.current ? "safe" : "primary";
 
       if (!openedRef.current && !safeModeRef.current) {
         safeModeRef.current = true;
-        setError(`接続に失敗したため安全モードで再試行します (${closeDetail})`);
+        setError(
+          `接続に失敗したため安全モードで再試行します (${closeDetail} mode=${mode})`,
+        );
         window.setTimeout(() => {
           connectInternal().catch(() => undefined);
         }, 400);
@@ -284,7 +289,7 @@ export function useDeepgram({
 
       if (isFatalCloseCode(event.code)) {
         shouldReconnectRef.current = false;
-        setError(`Deepgram接続が拒否されました (${closeDetail})`);
+        setError(`Deepgram接続が拒否されました (${closeDetail} mode=${mode})`);
         return;
       }
 
@@ -292,14 +297,16 @@ export function useDeepgram({
         if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
           reconnectAttemptsRef.current += 1;
           setError(
-            `接続が切れたため再接続中 (${reconnectAttemptsRef.current}) [${closeDetail}]`,
+            `接続が切れたため再接続中 (${reconnectAttemptsRef.current}) [${closeDetail} mode=${mode}]`,
           );
           window.setTimeout(() => {
             connectInternal().catch(() => undefined);
           }, 1_500);
         } else {
           shouldReconnectRef.current = false;
-          setError(`接続が不安定です。録音を再開してください。 (${closeDetail})`);
+          setError(
+            `接続が不安定です。録音を再開してください。 (${closeDetail} mode=${mode} socketError=${hadSocketErrorRef.current})`,
+          );
         }
       }
     };
