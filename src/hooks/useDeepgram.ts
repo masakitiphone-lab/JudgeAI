@@ -18,7 +18,6 @@ type UseDeepgramOptions = {
 const MAX_RECONNECT_ATTEMPTS = 3;
 
 function isFatalCloseCode(code: number): boolean {
-  // Deepgram auth/permission/parameter failures are typically non-retryable.
   return code === 1002 || code === 1003 || code === 1007 || code === 1008;
 }
 

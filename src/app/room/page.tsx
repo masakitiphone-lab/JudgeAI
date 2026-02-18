@@ -19,6 +19,8 @@ import { useDeepgram } from "@/hooks/useDeepgram";
 import { useJudge } from "@/hooks/useJudge";
 import { useSession } from "@/hooks/useSession";
 
+const BUILD_TAG = "build-20260218-3";
+
 type StoredSessionState = {
   utterances?: Utterance[];
   judgments?: Judgment[];
@@ -26,15 +28,9 @@ type StoredSessionState = {
 };
 
 function readStoredSessionState(): StoredSessionState {
-  if (typeof window === "undefined") {
-    return {};
-  }
-
+  if (typeof window === "undefined") return {};
   const raw = localStorage.getItem(SESSION_STATE_STORAGE_KEY);
-  if (!raw) {
-    return {};
-  }
-
+  if (!raw) return {};
   try {
     return JSON.parse(raw) as StoredSessionState;
   } catch {
@@ -71,9 +67,7 @@ export default function RoomPage() {
   const [roomError, setRoomError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (isReady && !token) {
-      router.replace("/");
-    }
+    if (isReady && !token) router.replace("/");
   }, [isReady, token, router]);
 
   useEffect(() => {
@@ -176,12 +170,15 @@ export default function RoomPage() {
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col px-3 pb-8 pt-4 md:px-6">
       <header className="rounded-2xl border border-white/15 bg-black/30 p-4 backdrop-blur">
+        <div className="mb-2 flex justify-end">
+          <span className="rounded border border-zinc-600 px-2 py-1 text-[10px] text-zinc-300">
+            {BUILD_TAG}
+          </span>
+        </div>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h1 className="text-2xl font-bold text-white">ケンカジャッジ</h1>
-            <p className="text-xs text-zinc-400">
-              タップで話者A/Bを切り替えできます
-            </p>
+            <p className="text-xs text-zinc-400">タップで話者A/Bを切り替えできます</p>
           </div>
           <div className="flex gap-2">
             <button
