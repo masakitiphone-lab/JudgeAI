@@ -19,11 +19,10 @@ import { useDeepgram } from "@/hooks/useDeepgram";
 import { useJudge } from "@/hooks/useJudge";
 import { useSession } from "@/hooks/useSession";
 
-const BUILD_TAG = "build-20260218-3";
+const BUILD_TAG = "build-20260218-4";
 
 type StoredSessionState = {
   utterances?: Utterance[];
-  judgments?: Judgment[];
   speaker_names?: SpeakerNames;
 };
 
@@ -40,9 +39,7 @@ function readStoredSessionState(): StoredSessionState {
 }
 
 function createId(): string {
-  if (globalThis.crypto?.randomUUID) {
-    return globalThis.crypto.randomUUID();
-  }
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
@@ -55,15 +52,11 @@ export default function RoomPage() {
   const [utterances, setUtterances] = useState<Utterance[]>(
     Array.isArray(initialState.utterances) ? initialState.utterances : [],
   );
-  const [judgments, setJudgments] = useState<Judgment[]>(
-    Array.isArray(initialState.judgments) ? initialState.judgments : [],
-  );
   const [speakerNames, setSpeakerNames] = useState<SpeakerNames>({
     0: initialState.speaker_names?.[0] || DEFAULT_SPEAKER_NAMES[0],
     1: initialState.speaker_names?.[1] || DEFAULT_SPEAKER_NAMES[1],
   });
-  const [activeJudgmentId, setActiveJudgmentId] = useState<string | null>(null);
-  const [showHistory, setShowHistory] = useState(false);
+  const [activeJudgment, setActiveJudgment] = useState<Judgment | null>(null);
   const [roomError, setRoomError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -73,11 +66,10 @@ export default function RoomPage() {
   useEffect(() => {
     const payload: StoredSessionState = {
       utterances,
-      judgments,
       speaker_names: speakerNames,
     };
     localStorage.setItem(SESSION_STATE_STORAGE_KEY, JSON.stringify(payload));
-  }, [utterances, judgments, speakerNames]);
+  }, [utterances, speakerNames]);
 
   const appendUtterances = useCallback((newUtterances: Utterance[]) => {
     setUtterances((prev) => [...prev, ...newUtterances]);
@@ -95,11 +87,6 @@ export default function RoomPage() {
     speakerNames,
     onAppendUtterances: appendUtterances,
   });
-
-  const activeJudgment = useMemo(
-    () => judgments.find((item) => item.id === activeJudgmentId) || null,
-    [judgments, activeJudgmentId],
-  );
 
   const handleToggleRecording = async () => {
     setRoomError(null);
@@ -134,8 +121,7 @@ export default function RoomPage() {
       input_utterance_count: utterances.length,
       result,
     };
-    setJudgments((prev) => [newJudgment, ...prev]);
-    setActiveJudgmentId(newJudgment.id);
+    setActiveJudgment(newJudgment);
   };
 
   const handleToggleUtteranceSpeaker = (utteranceId: string) => {
@@ -180,25 +166,16 @@ export default function RoomPage() {
             <h1 className="text-2xl font-bold text-white">ケンカジャッジ</h1>
             <p className="text-xs text-zinc-400">タップで話者A/Bを切り替えできます</p>
           </div>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => setShowHistory((prev) => !prev)}
-              className="rounded-lg border border-zinc-600 px-3 py-2 text-xs text-zinc-200 hover:bg-zinc-800"
-            >
-              {showHistory ? "履歴を閉じる" : "履歴"}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                logout();
-                router.replace("/");
-              }}
-              className="rounded-lg border border-zinc-600 px-3 py-2 text-xs text-zinc-200 hover:bg-zinc-800"
-            >
-              退室
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => {
+              logout();
+              router.replace("/");
+            }}
+            className="rounded-lg border border-zinc-600 px-3 py-2 text-xs text-zinc-200 hover:bg-zinc-800"
+          >
+            退室
+          </button>
         </div>
         <div className="mt-3">
           <SpeakerNameEditor
@@ -207,27 +184,6 @@ export default function RoomPage() {
           />
         </div>
       </header>
-
-      {showHistory && (
-        <section className="mt-3 rounded-2xl border border-white/10 bg-black/25 p-3">
-          <p className="text-xs text-zinc-400">ジャッジ履歴</p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {judgments.length === 0 && (
-              <p className="text-sm text-zinc-500">履歴はまだありません</p>
-            )}
-            {judgments.map((item) => (
-              <button
-                type="button"
-                key={item.id}
-                onClick={() => setActiveJudgmentId(item.id)}
-                className="rounded-lg border border-zinc-700 bg-zinc-900/70 px-3 py-2 text-left text-xs text-zinc-200 hover:border-amber-300/50"
-              >
-                {new Date(item.timestamp).toLocaleString("ja-JP")}
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
 
       <section className="mt-3 flex-1 overflow-hidden rounded-2xl border border-white/15 bg-black/20 p-3">
         <div className="h-[52vh] overflow-y-auto pr-1 md:h-[58vh]">
@@ -272,7 +228,7 @@ export default function RoomPage() {
         judgment={activeJudgment}
         speakerNames={speakerNames}
         open={Boolean(activeJudgment)}
-        onClose={() => setActiveJudgmentId(null)}
+        onClose={() => setActiveJudgment(null)}
       />
     </main>
   );

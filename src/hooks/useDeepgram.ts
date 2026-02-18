@@ -19,10 +19,10 @@ type DeepgramProxyResponse = {
       }>;
     }>;
   };
-  error?: string;
 };
 
-const CHUNK_MS = 2500;
+const CHUNK_MS = 1000;
+const REFRESH_MS = 3000;
 
 export function useDeepgram({
   sessionToken,
@@ -37,10 +37,13 @@ export function useDeepgram({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const timerIntervalRef = useRef<number | null>(null);
+  const refreshIntervalRef = useRef<number | null>(null);
   const speakerNamesRef = useRef(speakerNames);
   const appendRef = useRef(onAppendUtterances);
-  const isStoppingRef = useRef(false);
   const chunkBufferRef = useRef<Blob[]>([]);
+  const transcribingRef = useRef(false);
+  const pendingRef = useRef(false);
+  const lastProcessedEndRef = useRef(0);
 
   useEffect(() => {
     speakerNamesRef.current = speakerNames;
@@ -50,15 +53,19 @@ export function useDeepgram({
     appendRef.current = onAppendUtterances;
   }, [onAppendUtterances]);
 
-  const clearTimer = useCallback(() => {
+  const clearIntervals = useCallback(() => {
     if (timerIntervalRef.current) {
       window.clearInterval(timerIntervalRef.current);
       timerIntervalRef.current = null;
     }
+    if (refreshIntervalRef.current) {
+      window.clearInterval(refreshIntervalRef.current);
+      refreshIntervalRef.current = null;
+    }
   }, []);
 
   const cleanup = useCallback(async () => {
-    clearTimer();
+    clearIntervals();
     const recorder = mediaRecorderRef.current;
     if (recorder && recorder.state !== "inactive") {
       recorder.stop();
@@ -67,19 +74,29 @@ export function useDeepgram({
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
     mediaStreamRef.current = null;
     setInterimText("");
-  }, [clearTimer]);
+  }, [clearIntervals]);
 
-  const transcribeBlob = useCallback(
-    async (blob: Blob) => {
-      if (!sessionToken || blob.size === 0) return;
+  const transcribeCurrentBuffer = useCallback(async () => {
+    if (!sessionToken || chunkBufferRef.current.length === 0) return;
+    if (transcribingRef.current) {
+      pendingRef.current = true;
+      return;
+    }
+
+    transcribingRef.current = true;
+    try {
+      const mimeType =
+        mediaRecorderRef.current?.mimeType || "audio/webm;codecs=opus";
+      const mergedBlob = new Blob(chunkBufferRef.current, { type: mimeType });
+      if (mergedBlob.size === 0) return;
 
       const response = await fetch("/api/deepgram-proxy", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${sessionToken}`,
-          "Content-Type": blob.type || "audio/webm",
+          "Content-Type": mergedBlob.type || "audio/webm",
         },
-        body: blob,
+        body: mergedBlob,
       });
 
       if (!response.ok) {
@@ -94,13 +111,29 @@ export function useDeepgram({
       const words = data.results?.channels?.[0]?.alternatives?.[0]?.words || [];
       if (!words.length) return;
 
-      const utterances = groupWordsToUtterances(words, speakerNamesRef.current);
-      if (utterances.length > 0) {
-        appendRef.current(utterances);
+      const maxEnd = words.reduce(
+        (acc, word) => Math.max(acc, word.end ?? 0),
+        lastProcessedEndRef.current,
+      );
+      const newWords = words.filter(
+        (word) => (word.end ?? 0) > lastProcessedEndRef.current + 0.01,
+      );
+      if (newWords.length > 0) {
+        const utterances = groupWordsToUtterances(newWords, speakerNamesRef.current);
+        if (utterances.length > 0) {
+          appendRef.current(utterances);
+        }
       }
-    },
-    [sessionToken],
-  );
+      lastProcessedEndRef.current = maxEnd;
+      setInterimText("音声を自動文字起こし中...");
+    } finally {
+      transcribingRef.current = false;
+      if (pendingRef.current) {
+        pendingRef.current = false;
+        await transcribeCurrentBuffer();
+      }
+    }
+  }, [sessionToken]);
 
   const startRecording = useCallback(async () => {
     if (isRecording) return;
@@ -110,9 +143,12 @@ export function useDeepgram({
     }
 
     try {
-      isStoppingRef.current = false;
       setError(null);
       setElapsedSeconds(0);
+      setInterimText("録音を開始しました");
+      chunkBufferRef.current = [];
+      lastProcessedEndRef.current = 0;
+      pendingRef.current = false;
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -128,11 +164,11 @@ export function useDeepgram({
         MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
           ? "audio/webm;codecs=opus"
           : "audio/webm";
+
       const recorder = new MediaRecorder(stream, { mimeType });
       mediaRecorderRef.current = recorder;
-      chunkBufferRef.current = [];
 
-      recorder.ondataavailable = async (event: BlobEvent) => {
+      recorder.ondataavailable = (event: BlobEvent) => {
         if (!event.data || event.data.size === 0) return;
         chunkBufferRef.current.push(event.data);
       };
@@ -141,22 +177,9 @@ export function useDeepgram({
         setError("録音中にエラーが発生しました。");
       };
 
-      recorder.onstop = async () => {
+      recorder.onstop = () => {
         setIsRecording(false);
-        clearTimer();
-        if (chunkBufferRef.current.length > 0) {
-          const mergedBlob = new Blob(chunkBufferRef.current, { type: mimeType });
-          chunkBufferRef.current = [];
-          try {
-            await transcribeBlob(mergedBlob);
-          } catch (chunkError) {
-            const message =
-              chunkError instanceof Error
-                ? chunkError.message
-                : "文字起こしでエラーが発生しました。";
-            setError(message);
-          }
-        }
+        clearIntervals();
       };
 
       recorder.start(CHUNK_MS);
@@ -165,22 +188,40 @@ export function useDeepgram({
       timerIntervalRef.current = window.setInterval(() => {
         setElapsedSeconds((prev) => prev + 1);
       }, 1000);
+
+      refreshIntervalRef.current = window.setInterval(() => {
+        transcribeCurrentBuffer().catch((transcribeError) => {
+          const message =
+            transcribeError instanceof Error
+              ? transcribeError.message
+              : "文字起こしでエラーが発生しました。";
+          setError(message);
+        });
+      }, REFRESH_MS);
     } catch {
       await cleanup();
       setError("マイク初期化に失敗しました。権限を確認してください。");
     }
-  }, [cleanup, clearTimer, isRecording, sessionToken, transcribeBlob]);
+  }, [cleanup, clearIntervals, isRecording, sessionToken, transcribeCurrentBuffer]);
 
   const stopRecording = useCallback(async () => {
-    isStoppingRef.current = true;
     setIsRecording(false);
     setElapsedSeconds(0);
+    clearIntervals();
+    try {
+      await transcribeCurrentBuffer();
+    } catch (transcribeError) {
+      const message =
+        transcribeError instanceof Error
+          ? transcribeError.message
+          : "文字起こしでエラーが発生しました。";
+      setError(message);
+    }
     await cleanup();
-  }, [cleanup]);
+  }, [cleanup, clearIntervals, transcribeCurrentBuffer]);
 
   useEffect(() => {
     return () => {
-      isStoppingRef.current = true;
       cleanup().catch(() => undefined);
     };
   }, [cleanup]);
