@@ -2,7 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { DeepgramResultsMessage, SpeakerNames, Utterance } from "@/lib/types";
+import {
+  DEEPGRAM_QUERY_PARAMS_PRIMARY,
+  DEEPGRAM_QUERY_PARAMS_SAFE,
+} from "@/lib/constants";
+import { SpeakerNames, Utterance } from "@/lib/types";
 import { buildDeepgramWebSocketUrl, groupWordsToUtterances } from "@/lib/utils";
 
 type UseDeepgramOptions = {
@@ -12,6 +16,11 @@ type UseDeepgramOptions = {
 };
 
 const MAX_RECONNECT_ATTEMPTS = 3;
+
+function isFatalCloseCode(code: number): boolean {
+  // Deepgram auth/permission/parameter failures are typically non-retryable.
+  return code === 1002 || code === 1003 || code === 1007 || code === 1008;
+}
 
 export function useDeepgram({
   sessionToken,
@@ -36,6 +45,8 @@ export function useDeepgram({
   const reconnectAttemptsRef = useRef(0);
   const speakerNamesRef = useRef(speakerNames);
   const appendRef = useRef(onAppendUtterances);
+  const openedRef = useRef(false);
+  const safeModeRef = useRef(false);
 
   useEffect(() => {
     speakerNamesRef.current = speakerNames;
@@ -83,7 +94,7 @@ export function useDeepgram({
         ws.send(JSON.stringify({ type: "CloseStream" }));
       }
     } catch {
-      // ignore best-effort CloseStream failures
+      // ignore
     }
 
     if (
@@ -132,11 +143,17 @@ export function useDeepgram({
       return;
     }
 
-    const ws = new WebSocket(buildDeepgramWebSocketUrl(tokenData.token));
+    const queryParams = safeModeRef.current
+      ? DEEPGRAM_QUERY_PARAMS_SAFE
+      : DEEPGRAM_QUERY_PARAMS_PRIMARY;
+
+    const ws = new WebSocket(buildDeepgramWebSocketUrl(tokenData.token, queryParams));
     ws.binaryType = "arraybuffer";
     socketRef.current = ws;
+    openedRef.current = false;
 
     ws.onopen = async () => {
+      openedRef.current = true;
       setError(null);
       reconnectAttemptsRef.current = 0;
 
@@ -193,20 +210,44 @@ export function useDeepgram({
     };
 
     ws.onmessage = (event: MessageEvent<string>) => {
-      let payload: DeepgramResultsMessage;
+      let payload: unknown;
       try {
-        payload = JSON.parse(event.data) as DeepgramResultsMessage;
+        payload = JSON.parse(event.data);
       } catch {
         return;
       }
-      if (payload.type !== "Results") return;
 
-      const alt = payload.channel?.alternatives?.[0];
+      if (
+        typeof payload === "object" &&
+        payload !== null &&
+        "type" in payload &&
+        (payload as { type?: string }).type === "Error"
+      ) {
+        const message =
+          (payload as { description?: string; message?: string }).description ||
+          (payload as { description?: string; message?: string }).message ||
+          "不明なエラー";
+        shouldReconnectRef.current = false;
+        setError(`Deepgramエラー: ${message}`);
+        ws.close();
+        return;
+      }
+
+      const resultPayload = payload as {
+        type?: string;
+        is_final?: boolean;
+        channel?: {
+          alternatives?: Array<{ transcript?: string; words?: unknown[] }>;
+        };
+      };
+      if (resultPayload.type !== "Results") return;
+
+      const alt = resultPayload.channel?.alternatives?.[0];
       if (!alt) return;
 
-      if (payload.is_final) {
+      if (resultPayload.is_final) {
         const utterances = groupWordsToUtterances(
-          alt.words || [],
+          (alt.words as Parameters<typeof groupWordsToUtterances>[0]) || [],
           speakerNamesRef.current,
         );
         if (utterances.length > 0) {
@@ -222,22 +263,43 @@ export function useDeepgram({
       setError("音声ストリーム接続でエラーが発生しました。");
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event: CloseEvent) => {
       clearIntervals();
       cleanupAudio().catch(() => undefined);
       setIsRecording(false);
       setInterimText("");
 
+      const closeDetail = `code=${event.code}${
+        event.reason ? ` reason=${event.reason}` : ""
+      }`;
+
+      if (!openedRef.current && !safeModeRef.current) {
+        safeModeRef.current = true;
+        setError(`接続に失敗したため安全モードで再試行します (${closeDetail})`);
+        window.setTimeout(() => {
+          connectInternal().catch(() => undefined);
+        }, 400);
+        return;
+      }
+
+      if (isFatalCloseCode(event.code)) {
+        shouldReconnectRef.current = false;
+        setError(`Deepgram接続が拒否されました (${closeDetail})`);
+        return;
+      }
+
       if (!manualStopRef.current && shouldReconnectRef.current) {
         if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
           reconnectAttemptsRef.current += 1;
-          setError(`接続が切れたため再接続中 (${reconnectAttemptsRef.current})`);
+          setError(
+            `接続が切れたため再接続中 (${reconnectAttemptsRef.current}) [${closeDetail}]`,
+          );
           window.setTimeout(() => {
             connectInternal().catch(() => undefined);
           }, 1_500);
         } else {
           shouldReconnectRef.current = false;
-          setError("接続が不安定です。録音を再開してください。");
+          setError(`接続が不安定です。録音を再開してください。 (${closeDetail})`);
         }
       }
     };
@@ -249,6 +311,7 @@ export function useDeepgram({
     manualStopRef.current = false;
     shouldReconnectRef.current = true;
     reconnectAttemptsRef.current = 0;
+    safeModeRef.current = false;
     setElapsedSeconds(0);
     setError(null);
 

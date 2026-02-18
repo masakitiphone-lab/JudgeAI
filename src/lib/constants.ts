@@ -10,7 +10,7 @@ export const SESSION_STATE_STORAGE_KEY = "kenka_session_state_v1";
 
 export const DEEPGRAM_WS_BASE_URL = "wss://api.deepgram.com/v1/listen";
 
-export const DEEPGRAM_QUERY_PARAMS: Record<string, string> = {
+export const DEEPGRAM_QUERY_PARAMS_PRIMARY: Record<string, string> = {
   model: "nova-3",
   language: "ja",
   diarize: "true",
@@ -19,6 +19,16 @@ export const DEEPGRAM_QUERY_PARAMS: Record<string, string> = {
   interim_results: "true",
   endpointing: "300",
   utterance_end_ms: "1000",
+  encoding: "linear16",
+  sample_rate: "16000",
+  channels: "1",
+};
+
+export const DEEPGRAM_QUERY_PARAMS_SAFE: Record<string, string> = {
+  model: "nova-3",
+  language: "ja",
+  interim_results: "true",
+  punctuate: "true",
   encoding: "linear16",
   sample_rate: "16000",
   channels: "1",

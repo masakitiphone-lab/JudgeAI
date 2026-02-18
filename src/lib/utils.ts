@@ -1,4 +1,4 @@
-import { DEEPGRAM_QUERY_PARAMS, DEEPGRAM_WS_BASE_URL } from "@/lib/constants";
+import { DEEPGRAM_WS_BASE_URL } from "@/lib/constants";
 import {
   DeepgramWord,
   JudgmentResult,
@@ -30,12 +30,15 @@ export function speakerLabel(speaker: number, speakerNames: SpeakerNames): strin
   return `話者${speaker}`;
 }
 
-export function buildDeepgramWebSocketUrl(token: string): string {
-  const params = new URLSearchParams({
-    ...DEEPGRAM_QUERY_PARAMS,
+export function buildDeepgramWebSocketUrl(
+  token: string,
+  params: Record<string, string>,
+): string {
+  const query = new URLSearchParams({
+    ...params,
     token,
   });
-  return `${DEEPGRAM_WS_BASE_URL}?${params.toString()}`;
+  return `${DEEPGRAM_WS_BASE_URL}?${query.toString()}`;
 }
 
 export function groupWordsToUtterances(
@@ -98,7 +101,10 @@ export function buildConversationLog(
   names: SpeakerNames,
 ): string {
   return utterances
-    .map((utterance) => `[${speakerLabel(utterance.speaker, names)}] ${utterance.transcript}`)
+    .map(
+      (utterance) =>
+        `[${speakerLabel(utterance.speaker, names)}] ${utterance.transcript}`,
+    )
     .join("\n");
 }
 
@@ -161,7 +167,8 @@ export function normalizeJudgmentResult(input: unknown): JudgmentResult {
 
   const result = input as Partial<JudgmentResult>;
   return {
-    summary: typeof result.summary === "string" ? result.summary : defaultResult.summary,
+    summary:
+      typeof result.summary === "string" ? result.summary : defaultResult.summary,
     speaker_0_position:
       typeof result.speaker_0_position === "string"
         ? result.speaker_0_position
@@ -171,13 +178,17 @@ export function normalizeJudgmentResult(input: unknown): JudgmentResult {
         ? result.speaker_1_position
         : defaultResult.speaker_1_position,
     analysis: {
-      speaker_0_valid_points: Array.isArray(result.analysis?.speaker_0_valid_points)
+      speaker_0_valid_points: Array.isArray(
+        result.analysis?.speaker_0_valid_points,
+      )
         ? result.analysis.speaker_0_valid_points
         : defaultResult.analysis.speaker_0_valid_points,
       speaker_0_issues: Array.isArray(result.analysis?.speaker_0_issues)
         ? result.analysis.speaker_0_issues
         : defaultResult.analysis.speaker_0_issues,
-      speaker_1_valid_points: Array.isArray(result.analysis?.speaker_1_valid_points)
+      speaker_1_valid_points: Array.isArray(
+        result.analysis?.speaker_1_valid_points,
+      )
         ? result.analysis.speaker_1_valid_points
         : defaultResult.analysis.speaker_1_valid_points,
       speaker_1_issues: Array.isArray(result.analysis?.speaker_1_issues)
