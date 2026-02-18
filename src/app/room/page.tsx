@@ -19,7 +19,15 @@ import { useDeepgram } from "@/hooks/useDeepgram";
 import { useJudge } from "@/hooks/useJudge";
 import { useSession } from "@/hooks/useSession";
 
-const BUILD_TAG = "build-20260218-4";
+const BUILD_TAG = "build-20260218-5";
+const LOCALE_KEY = "kenka_ui_locale";
+type Locale = "ja" | "en";
+
+function readLocale(): Locale {
+  if (typeof window === "undefined") return "ja";
+  const stored = localStorage.getItem(LOCALE_KEY);
+  return stored === "en" ? "en" : "ja";
+}
 
 type StoredSessionState = {
   utterances?: Utterance[];
@@ -49,6 +57,7 @@ export default function RoomPage() {
   const { judgeConversation, isJudging, error: judgeError } = useJudge();
   const initialState = useMemo(() => readStoredSessionState(), []);
 
+  const [locale, setLocale] = useState<Locale>(() => readLocale());
   const [utterances, setUtterances] = useState<Utterance[]>(
     Array.isArray(initialState.utterances) ? initialState.utterances : [],
   );
@@ -58,6 +67,8 @@ export default function RoomPage() {
   });
   const [activeJudgment, setActiveJudgment] = useState<Judgment | null>(null);
   const [roomError, setRoomError] = useState<string | null>(null);
+
+  const isJa = locale === "ja";
 
   useEffect(() => {
     if (isReady && !token) router.replace("/");
@@ -99,11 +110,19 @@ export default function RoomPage() {
 
   const handleJudge = async () => {
     if (!token) {
-      setRoomError("セッション切れです。再ログインしてください。");
+      setRoomError(
+        isJa
+          ? "セッション切れです。再ログインしてください。"
+          : "Session expired. Please login again.",
+      );
       return;
     }
     if (utterances.length === 0) {
-      setRoomError("会話ログがありません。録音してから実行してください。");
+      setRoomError(
+        isJa
+          ? "会話ログがありません。録音してから実行してください。"
+          : "No transcript yet. Start recording first.",
+      );
       return;
     }
 
@@ -145,10 +164,16 @@ export default function RoomPage() {
     }));
   };
 
+  const handleToggleLocale = () => {
+    const next: Locale = isJa ? "en" : "ja";
+    setLocale(next);
+    localStorage.setItem(LOCALE_KEY, next);
+  };
+
   if (!isReady || !token) {
     return (
       <main className="flex min-h-screen items-center justify-center px-4 text-sm text-zinc-300">
-        認証状態を確認中...
+        {isJa ? "認証状態を確認中..." : "Checking session..."}
       </main>
     );
   }
@@ -156,15 +181,28 @@ export default function RoomPage() {
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col px-3 pb-8 pt-4 md:px-6">
       <header className="rounded-2xl border border-white/15 bg-black/30 p-4 backdrop-blur">
-        <div className="mb-2 flex justify-end">
+        <div className="mb-2 flex justify-end gap-2">
           <span className="rounded border border-zinc-600 px-2 py-1 text-[10px] text-zinc-300">
             {BUILD_TAG}
           </span>
+          <button
+            type="button"
+            onClick={handleToggleLocale}
+            className="rounded border border-zinc-600 px-2 py-1 text-[10px] text-zinc-200 hover:bg-zinc-800"
+          >
+            {isJa ? "EN" : "JP"}
+          </button>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h1 className="text-2xl font-bold text-white">ケンカジャッジ</h1>
-            <p className="text-xs text-zinc-400">タップで話者A/Bを切り替えできます</p>
+            <h1 className="text-2xl font-bold text-white">
+              {isJa ? "ケンカジャッジ" : "Kenka Judge"}
+            </h1>
+            <p className="text-xs text-zinc-400">
+              {isJa
+                ? "タップで話者A/Bを切り替えできます"
+                : "Tap a transcript to swap speaker A/B"}
+            </p>
           </div>
           <button
             type="button"
@@ -174,13 +212,14 @@ export default function RoomPage() {
             }}
             className="rounded-lg border border-zinc-600 px-3 py-2 text-xs text-zinc-200 hover:bg-zinc-800"
           >
-            退室
+            {isJa ? "退室" : "Exit"}
           </button>
         </div>
         <div className="mt-3">
           <SpeakerNameEditor
             speakerNames={speakerNames}
             onChange={handleSpeakerNameChange}
+            locale={locale}
           />
         </div>
       </header>
@@ -191,10 +230,11 @@ export default function RoomPage() {
             utterances={utterances}
             speakerNames={speakerNames}
             onToggleSpeaker={handleToggleUtteranceSpeaker}
+            locale={locale}
           />
         </div>
         <div className="mt-3">
-          <InterimText text={interimText} />
+          <InterimText text={interimText} locale={locale} />
         </div>
       </section>
 
@@ -205,7 +245,15 @@ export default function RoomPage() {
               isRecording ? "animate-pulse bg-red-500" : "bg-zinc-500"
             }`}
           />
-          <span>{isRecording ? `録音中 (${formatElapsed(elapsedSeconds)})` : "待機中"}</span>
+          <span>
+            {isRecording
+              ? isJa
+                ? `録音中 (${formatElapsed(elapsedSeconds)})`
+                : `Recording (${formatElapsed(elapsedSeconds)})`
+              : isJa
+                ? "待機中"
+                : "Idle"}
+          </span>
         </div>
 
         {(roomError || deepgramError || judgeError) && (
@@ -215,11 +263,16 @@ export default function RoomPage() {
         )}
 
         <div className="flex flex-wrap gap-2">
-          <RecordButton isRecording={isRecording} onClick={handleToggleRecording} />
+          <RecordButton
+            isRecording={isRecording}
+            onClick={handleToggleRecording}
+            locale={locale}
+          />
           <JudgeButton
             onClick={handleJudge}
             isLoading={isJudging}
             disabled={utterances.length === 0}
+            locale={locale}
           />
         </div>
       </section>
@@ -229,6 +282,7 @@ export default function RoomPage() {
         speakerNames={speakerNames}
         open={Boolean(activeJudgment)}
         onClose={() => setActiveJudgment(null)}
+        locale={locale}
       />
     </main>
   );

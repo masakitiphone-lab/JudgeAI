@@ -5,10 +5,13 @@ import { useEffect, useRef } from "react";
 import { SpeakerNames, Utterance } from "@/lib/types";
 import { speakerLabel } from "@/lib/utils";
 
+type Locale = "ja" | "en";
+
 type TranscriptDisplayProps = {
   utterances: Utterance[];
   speakerNames: SpeakerNames;
   onToggleSpeaker: (utteranceId: string) => void;
+  locale?: Locale;
 };
 
 function toClock(value: number): string {
@@ -25,8 +28,10 @@ export function TranscriptDisplay({
   utterances,
   speakerNames,
   onToggleSpeaker,
+  locale = "ja",
 }: TranscriptDisplayProps) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const isJa = locale === "ja";
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -35,7 +40,9 @@ export function TranscriptDisplay({
   if (utterances.length === 0) {
     return (
       <div className="rounded-2xl border border-white/10 bg-black/20 p-6 text-center text-sm text-zinc-400">
-        まだ会話ログがありません。録音を開始してください。
+        {isJa
+          ? "まだ会話ログがありません。録音を開始してください。"
+          : "No transcript yet. Start recording."}
       </div>
     );
   }

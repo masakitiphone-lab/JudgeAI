@@ -1,14 +1,19 @@
+type Locale = "ja" | "en";
+
 type RecordButtonProps = {
   isRecording: boolean;
   disabled?: boolean;
   onClick: () => void;
+  locale?: Locale;
 };
 
 export function RecordButton({
   isRecording,
   disabled = false,
   onClick,
+  locale = "ja",
 }: RecordButtonProps) {
+  const isJa = locale === "ja";
   return (
     <button
       type="button"
@@ -20,7 +25,13 @@ export function RecordButton({
           : "bg-emerald-500 text-zinc-950 hover:bg-emerald-400"
       } disabled:cursor-not-allowed disabled:opacity-60`}
     >
-      {isRecording ? "録音OFF" : "録音ON"}
+      {isRecording
+        ? isJa
+          ? "録音OFF"
+          : "Stop"
+        : isJa
+          ? "録音ON"
+          : "Record"}
     </button>
   );
 }
