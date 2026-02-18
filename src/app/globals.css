@@ -1,0 +1,28 @@
+@import "tailwindcss";
+
+:root {
+  --bg-primary: #07070f;
+  --bg-secondary: #11162a;
+  --text-primary: #f3f5ff;
+  --text-muted: #9da3b8;
+  --accent-gold: #f3b43d;
+}
+
+@theme inline {
+  --font-sans: var(--font-noto-sans-jp);
+}
+
+body {
+  min-height: 100vh;
+  color: var(--text-primary);
+  background:
+    radial-gradient(1200px 600px at 10% 10%, #24315f44 0%, transparent 60%),
+    radial-gradient(900px 500px at 95% 15%, #6a2c4d44 0%, transparent 55%),
+    linear-gradient(165deg, var(--bg-secondary) 0%, var(--bg-primary) 65%);
+  font-family: var(--font-noto-sans-jp), sans-serif;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #444a65 transparent;
+}
