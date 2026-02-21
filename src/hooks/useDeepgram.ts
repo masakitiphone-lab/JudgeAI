@@ -98,8 +98,7 @@ export function useDeepgram({
     });
 
     const ws = new WebSocket(
-      `wss://api.deepgram.com/v1/listen?${params.toString()}`,
-      ["token", deepgramApiKey]
+      `wss://api.deepgram.com/v1/listen?${params.toString()}&api_key=${deepgramApiKey}`
     );
 
     ws.onopen = () => {
