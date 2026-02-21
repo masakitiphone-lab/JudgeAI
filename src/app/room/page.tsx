@@ -19,7 +19,9 @@ import { useDeepgram } from "@/hooks/useDeepgram";
 import { useJudge } from "@/hooks/useJudge";
 import { useSession } from "@/hooks/useSession";
 
-const BUILD_TAG = "build-20260218-5";
+const BUILD_TAG = process.env.NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID 
+  ? `build-${process.env.NEXT_PUBLIC_VERCEL_DEPLOYMENT_ID.slice(0, 8)}`
+  : "dev";
 const LOCALE_KEY = "kenka_ui_locale";
 type Locale = "ja" | "en";
 
