@@ -101,12 +101,11 @@ export function useDeepgram({
       diarize: "true",
     });
 
-    // URL encode the API key to handle special characters
-    const encodedApiKey = encodeURIComponent(deepgramApiKey);
-    const wsUrl = `wss://api.deepgram.com/v1/listen?${params.toString()}&api_key=${encodedApiKey}`;
-    console.log("Deepgram WebSocket URL:", wsUrl.replace(encodedApiKey, "***"));
+    const wsUrl = `wss://api.deepgram.com/v1/listen?${params.toString()}`;
+    console.log("Deepgram WebSocket URL:", wsUrl);
 
-    const ws = new WebSocket(wsUrl);
+    // Use Sec-WebSocket-Protocol header for authentication
+    const ws = new WebSocket(wsUrl, ["token", deepgramApiKey]);
 
     ws.onopen = () => {
       console.log("Deepgram WebSocket connected successfully");
