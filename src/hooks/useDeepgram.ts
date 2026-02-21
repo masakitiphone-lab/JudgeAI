@@ -41,7 +41,7 @@ export function useDeepgram({
   const [error, setError] = useState<string | null>(null);
 
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const timerIntervalRef = useRef<number | null>(null);
   const speakerNamesRef = useRef(speakerNames);
   const appendRef = useRef(onAppendUtterances);
@@ -71,14 +71,14 @@ export function useDeepgram({
     }
     wsRef.current = null;
 
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    mediaRecorderRef.current = null;
+
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((track) => track.stop());
       mediaStreamRef.current = null;
-    }
-
-    if (audioContextRef.current) {
-      await audioContextRef.current.close();
-      audioContextRef.current = null;
     }
 
     setInterimText("");
@@ -93,21 +93,11 @@ export function useDeepgram({
       throw new Error("Deepgram API key is not configured. Please set NEXT_PUBLIC_DEEPGRAM_API_KEY in Vercel.");
     }
 
-    const params = new URLSearchParams({
-      model: "nova-3",
-      language: "multi",
-      punctuate: "true",
-      smart_format: "true",
-      diarize: "true",
-      encoding: "linear16",
-      sample_rate: "16000",
-    });
+    // Use Sec-WebSocket-Protocol for authentication (as per official docs)
+    const wsUrl = `wss://api.deepgram.com/v1/listen?model=nova-3&language=multi&punctuate=true&smart_format=true&diarize=true`;
+    console.log("Deepgram WebSocket URL:", wsUrl);
 
-    // Use URL parameter for authentication
-    const wsUrl = `wss://api.deepgram.com/v1/listen?${params.toString()}&api_key=${deepgramApiKey}`;
-    console.log("Deepgram WebSocket URL:", wsUrl.replace(deepgramApiKey, "***"));
-
-    const ws = new WebSocket(wsUrl);
+    const ws = new WebSocket(wsUrl, ["token", deepgramApiKey]);
 
     ws.onopen = () => {
       console.log("Deepgram WebSocket connected successfully");
@@ -210,36 +200,22 @@ export function useDeepgram({
         throw new Error("Failed to connect to Deepgram");
       }
 
-      // Create AudioContext
-      const audioContext = new AudioContext({
-        sampleRate: 16000,
+      // Use MediaRecorder to send raw audio (WebM/Opus) directly
+      // This is the official recommended approach from Deepgram docs
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: "audio/webm;codecs=opus",
       });
-      audioContextRef.current = audioContext;
 
-      // Connect microphone to Deepgram via MediaStreamSource
-      const source = audioContext.createMediaStreamSource(stream);
-      
-      // Create a script processor for processing audio chunks
-      const processor = audioContext.createScriptProcessor(4096, 1, 1);
-      
-      processor.onaudioprocess = (event) => {
+      mediaRecorder.ondataavailable = (event) => {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
         
-        const inputData = event.inputBuffer.getChannelData(0);
-        
-        // Convert Float32Array to Int16Array (PCM 16-bit)
-        const int16Data = new Int16Array(inputData.length);
-        for (let i = 0; i < inputData.length; i++) {
-          const s = Math.max(-1, Math.min(1, inputData[i]));
-          int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+        if (event.data.size > 0) {
+          wsRef.current.send(event.data);
         }
-        
-        // Send to Deepgram
-        wsRef.current.send(int16Data.buffer);
       };
 
-      source.connect(processor);
-      processor.connect(audioContext.destination);
+      mediaRecorder.start(250); // Send data every 250ms
+      mediaRecorderRef.current = mediaRecorder;
 
       setIsRecording(true);
 
