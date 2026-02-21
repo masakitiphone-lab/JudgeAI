@@ -99,6 +99,8 @@ export function useDeepgram({
       punctuate: "true",
       smart_format: "true",
       diarize: "true",
+      encoding: "linear16",
+      sample_rate: "16000",
     });
 
     const wsUrl = `wss://api.deepgram.com/v1/listen?${params.toString()}`;
