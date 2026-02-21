@@ -26,7 +26,6 @@ export async function POST(req: NextRequest) {
 
   const params = new URLSearchParams({
     model: "nova-3",
-    language: "ja",
     diarize: "true",
     punctuate: "true",
     smart_format: "true",
