@@ -109,6 +109,14 @@ export function useDeepgram({
       try {
         const data = JSON.parse(event.data) as DeepgramTranscriptResponse;
         
+        // Check for error responses from Deepgram
+        if (data.type === "Error" || data.type === "error") {
+          console.error("Deepgram error response:", data);
+          const errMsg = (data as any).error?.message || "Deepgramでエラーが発生しました";
+          setError(`文字起こしでエラーが発生しました。: ${errMsg}`);
+          return;
+        }
+        
         const channel = data.channel;
         if (!channel?.alternatives?.[0]) return;
 
@@ -152,8 +160,11 @@ export function useDeepgram({
       setError("文字起こしでエラーが発生しました。");
     };
 
-    ws.onclose = () => {
-      console.log("Deepgram WebSocket closed");
+    ws.onclose = (event) => {
+      console.log("Deepgram WebSocket closed", event.code, event.reason);
+      if (event.code !== 1000 && event.code !== 1001) {
+        setError(`文字起こしでエラーが発生しました。（コード: ${event.code}）`);
+      }
     };
 
     wsRef.current = ws;
