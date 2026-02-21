@@ -86,8 +86,11 @@ export function useDeepgram({
 
   const connectToDeepgram = useCallback(async () => {
     const deepgramApiKey = process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY;
+    console.log("Deepgram connection attempt - API key exists:", !!deepgramApiKey);
+    console.log("Deepgram connection attempt - API key length:", deepgramApiKey?.length);
+    
     if (!deepgramApiKey) {
-      throw new Error("Deepgram API key is not configured");
+      throw new Error("Deepgram API key is not configured. Please set NEXT_PUBLIC_DEEPGRAM_API_KEY in Vercel.");
     }
 
     const params = new URLSearchParams({
@@ -97,12 +100,15 @@ export function useDeepgram({
       diarize: "true",
     });
 
-    const ws = new WebSocket(
-      `wss://api.deepgram.com/v1/listen?${params.toString()}&api_key=${deepgramApiKey}`
-    );
+    // URL encode the API key to handle special characters
+    const encodedApiKey = encodeURIComponent(deepgramApiKey);
+    const wsUrl = `wss://api.deepgram.com/v1/listen?${params.toString()}&api_key=${encodedApiKey}`;
+    console.log("Deepgram WebSocket URL:", wsUrl.replace(encodedApiKey, "***"));
+
+    const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
-      console.log("Deepgram WebSocket connected");
+      console.log("Deepgram WebSocket connected successfully");
     };
 
     ws.onmessage = (event) => {
