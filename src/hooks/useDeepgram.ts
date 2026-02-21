@@ -103,11 +103,11 @@ export function useDeepgram({
       sample_rate: "16000",
     });
 
-    const wsUrl = `wss://api.deepgram.com/v1/listen?${params.toString()}`;
-    console.log("Deepgram WebSocket URL:", wsUrl);
+    // Use URL parameter for authentication
+    const wsUrl = `wss://api.deepgram.com/v1/listen?${params.toString()}&api_key=${deepgramApiKey}`;
+    console.log("Deepgram WebSocket URL:", wsUrl.replace(deepgramApiKey, "***"));
 
-    // Use Sec-WebSocket-Protocol header for authentication (with space after Token)
-    const ws = new WebSocket(wsUrl, ["Token " + deepgramApiKey]);
+    const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
       console.log("Deepgram WebSocket connected successfully");
