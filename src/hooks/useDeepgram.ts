@@ -202,9 +202,27 @@ export function useDeepgram({
 
       // Use MediaRecorder to send raw audio (WebM/Opus) directly
       // This is the official recommended approach from Deepgram docs
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: "audio/webm;codecs=opus",
-      });
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") 
+        ? "audio/webm;codecs=opus" 
+        : MediaRecorder.isTypeSupported("audio/webm")
+          ? "audio/webm"
+          : undefined;
+      
+      console.log("MediaRecorder mimeType:", mimeType);
+      
+      if (!mimeType) {
+        throw new Error("MediaRecorder: WebM format not supported in this browser");
+      }
+
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      
+      mediaRecorder.onstart = () => {
+        console.log("MediaRecorder started");
+      };
+      
+      mediaRecorder.onerror = (event) => {
+        console.error("MediaRecorder error:", event);
+      };
 
       mediaRecorder.ondataavailable = (event) => {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
@@ -214,8 +232,11 @@ export function useDeepgram({
         }
       };
 
+      // Start recording and send data
       mediaRecorder.start(250); // Send data every 250ms
       mediaRecorderRef.current = mediaRecorder;
+      
+      console.log("Recording started");
 
       setIsRecording(true);
 
