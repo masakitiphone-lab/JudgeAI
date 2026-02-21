@@ -95,6 +95,7 @@ export function useDeepgram({
 
     const params = new URLSearchParams({
       model: "nova-3",
+      language: "multi",
       punctuate: "true",
       smart_format: "true",
       diarize: "true",
