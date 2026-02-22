@@ -84,91 +84,6 @@ export function useDeepgram({
     setInterimText("");
   }, [clearIntervals]);
 
-  const connectToDeepgram = useCallback(async () => {
-    const deepgramApiKey = process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY;
-    console.log("Deepgram connection attempt - API key exists:", !!deepgramApiKey);
-    console.log("Deepgram connection attempt - API key length:", deepgramApiKey?.length);
-    
-    if (!deepgramApiKey) {
-      throw new Error("Deepgram API key is not configured. Please set NEXT_PUBLIC_DEEPGRAM_API_KEY in Vercel.");
-    }
-
-    // Use Sec-WebSocket-Protocol for authentication (as per official docs)
-    const wsUrl = `wss://api.deepgram.com/v1/listen?model=nova-3&language=multi&punctuate=true&smart_format=true&diarize=true`;
-    console.log("Deepgram WebSocket URL:", wsUrl);
-
-    const ws = new WebSocket(wsUrl, ["token", deepgramApiKey]);
-
-    ws.onopen = () => {
-      console.log("Deepgram WebSocket connected successfully");
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data) as DeepgramTranscriptResponse;
-        
-        // Check for error responses from Deepgram
-        if (data.type === "Error" || data.type === "error") {
-          console.error("Deepgram error response:", data);
-          const errMsg = (data as any).error?.message || "Deepgramでエラーが発生しました";
-          setError(`文字起こしでエラーが発生しました。: ${errMsg}`);
-          return;
-        }
-        
-        const channel = data.channel;
-        if (!channel?.alternatives?.[0]) return;
-
-        const alternative = channel.alternatives[0];
-        const transcript = alternative.transcript;
-        const words = alternative.words || [];
-
-        if (!transcript || words.length === 0) return;
-
-        // Process final results
-        if (data.is_final) {
-          const newWords = words.filter(
-            (word: DeepgramWord) => (word.end ?? 0) > lastProcessedEndRef.current + 0.01
-          );
-          
-          if (newWords.length > 0) {
-            const utterances = groupWordsToUtterances(newWords, speakerNamesRef.current);
-            if (utterances.length > 0) {
-              appendRef.current(utterances);
-            }
-            
-            const maxEnd = words.reduce(
-              (acc: number, word: DeepgramWord) => Math.max(acc, word.end ?? 0),
-              lastProcessedEndRef.current
-            );
-            lastProcessedEndRef.current = maxEnd;
-          }
-          
-          setInterimText("");
-        } else {
-          // Interim result
-          setInterimText(transcript);
-        }
-      } catch (err) {
-        console.error("Error parsing Deepgram message:", err);
-      }
-    };
-
-    ws.onerror = (event) => {
-      console.error("Deepgram WebSocket error:", event);
-      setError("文字起こしでエラーが発生しました。");
-    };
-
-    ws.onclose = (event) => {
-      console.log("Deepgram WebSocket closed", event.code, event.reason);
-      if (event.code !== 1000 && event.code !== 1001) {
-        setError(`文字起こしでエラーが発生しました。（コード: ${event.code}）`);
-      }
-    };
-
-    wsRef.current = ws;
-    return ws;
-  }, []);
-
   const startRecording = useCallback(async () => {
     if (isRecording) return;
     if (!sessionToken) {
@@ -193,50 +108,124 @@ export function useDeepgram({
       });
       mediaStreamRef.current = stream;
 
-      // Connect to Deepgram Streaming API
-      await connectToDeepgram();
-
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-        throw new Error("Failed to connect to Deepgram");
+      const deepgramApiKey = process.env.NEXT_PUBLIC_DEEPGRAM_API_KEY;
+      console.log("Deepgram API key exists:", !!deepgramApiKey);
+      
+      if (!deepgramApiKey) {
+        throw new Error("Deepgram API key is not configured.");
       }
 
-      // Use MediaRecorder to send raw audio (WebM/Opus) directly
-      // This is the official recommended approach from Deepgram docs
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") 
-        ? "audio/webm;codecs=opus" 
-        : MediaRecorder.isTypeSupported("audio/webm")
-          ? "audio/webm"
-          : undefined;
-      
-      console.log("MediaRecorder mimeType:", mimeType);
-      
-      if (!mimeType) {
-        throw new Error("MediaRecorder: WebM format not supported in this browser");
-      }
+      // Simplified URL - just model parameter
+      const wsUrl = "wss://api.deepgram.com/v1/listen?model=nova-3";
+      console.log("Connecting to Deepgram:", wsUrl);
 
-      const mediaRecorder = new MediaRecorder(stream, { mimeType });
-      
-      mediaRecorder.onstart = () => {
+      // Create WebSocket connection
+      const ws = new WebSocket(wsUrl, ["token", deepgramApiKey]);
+
+      // Create MediaRecorder with simple mimeType (as per official tutorial)
+      const mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      mediaRecorderRef.current = mediaRecorder;
+
+      // Handle WebSocket open - start MediaRecorder INSIDE onopen
+      ws.onopen = () => {
+        console.log("Deepgram WebSocket connected");
+        
+        // Start MediaRecorder INSIDE onopen (this is the key fix!)
+        mediaRecorder.addEventListener("dataavailable", (event) => {
+          if (ws.readyState === WebSocket.OPEN && event.data.size > 0) {
+            ws.send(event.data);
+          }
+        });
+        
+        mediaRecorder.start(250);
         console.log("MediaRecorder started");
       };
-      
-      mediaRecorder.onerror = (event) => {
-        console.error("MediaRecorder error:", event);
-      };
 
-      mediaRecorder.ondataavailable = (event) => {
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-        
-        if (event.data.size > 0) {
-          wsRef.current.send(event.data);
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data) as DeepgramTranscriptResponse;
+          
+          // Check for error responses from Deepgram
+          if (data.type === "Error" || data.type === "error") {
+            console.error("Deepgram error response:", data);
+            const errMsg = (data as any).error?.message || "Deepgramでエラーが発生しました";
+            setError(`文字起こしでエラーが発生しました。: ${errMsg}`);
+            return;
+          }
+          
+          const channel = data.channel;
+          if (!channel?.alternatives?.[0]) return;
+
+          const alternative = channel.alternatives[0];
+          const transcript = alternative.transcript;
+          const words = alternative.words || [];
+
+          if (!transcript || words.length === 0) return;
+
+          // Process final results
+          if (data.is_final) {
+            const newWords = words.filter(
+              (word: DeepgramWord) => (word.end ?? 0) > lastProcessedEndRef.current + 0.01
+            );
+            
+            if (newWords.length > 0) {
+              const utterances = groupWordsToUtterances(newWords, speakerNamesRef.current);
+              if (utterances.length > 0) {
+                appendRef.current(utterances);
+              }
+              
+              const maxEnd = words.reduce(
+                (acc: number, word: DeepgramWord) => Math.max(acc, word.end ?? 0),
+                lastProcessedEndRef.current
+              );
+              lastProcessedEndRef.current = maxEnd;
+            }
+            
+            setInterimText("");
+          } else {
+            // Interim result
+            setInterimText(transcript);
+          }
+        } catch (err) {
+          console.error("Error parsing Deepgram message:", err);
         }
       };
 
-      // Start recording and send data
-      mediaRecorder.start(250); // Send data every 250ms
-      mediaRecorderRef.current = mediaRecorder;
-      
-      console.log("Recording started");
+      ws.onerror = (event) => {
+        console.error("Deepgram WebSocket error:", event);
+        setError("文字起こしでエラーが発生しました。");
+      };
+
+      ws.onclose = (event) => {
+        console.log("Deepgram WebSocket closed", event.code, event.reason);
+        if (event.code !== 1000 && event.code !== 1001) {
+          setError(`文字起こしでエラーが発生しました。（コード: ${event.code}）`);
+        }
+      };
+
+      wsRef.current = ws;
+
+      // Wait for WebSocket to open before proceeding
+      await new Promise<void>((resolve, reject) => {
+        if (!wsRef.current) {
+          reject(new Error("WebSocket not created"));
+          return;
+        }
+        
+        const timeout = setTimeout(() => {
+          reject(new Error("WebSocket connection timeout"));
+        }, 10000);
+
+        wsRef.current.onopen = () => {
+          clearTimeout(timeout);
+          resolve();
+        };
+        
+        wsRef.current.onerror = () => {
+          clearTimeout(timeout);
+          reject(new Error("WebSocket connection failed"));
+        };
+      });
 
       setIsRecording(true);
 
@@ -248,7 +237,7 @@ export function useDeepgram({
       const message = err instanceof Error ? err.message : "マイク初期化に失敗しました。権限を確認してください。";
       setError(message);
     }
-  }, [cleanup, connectToDeepgram, isRecording, sessionToken]);
+  }, [cleanup, isRecording, sessionToken]);
 
   const stopRecording = useCallback(async () => {
     setIsRecording(false);
