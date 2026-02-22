@@ -28,6 +28,7 @@ export function useDeepgram({
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const isRecordingRef = useRef(false);
   const timerIntervalRef = useRef<number | null>(null);
   const speakerNamesRef = useRef(speakerNames);
   const appendRef = useRef(onAppendUtterances);
@@ -48,7 +49,7 @@ export function useDeepgram({
   }, []);
 
   const updateAudioLevel = useCallback(() => {
-    if (!analyserRef.current) return;
+    if (!analyserRef.current || !isRecordingRef.current) return;
     
     const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
     analyserRef.current.getByteFrequencyData(dataArray);
@@ -58,10 +59,10 @@ export function useDeepgram({
     const level = Math.min(100, (average / 128) * 100);
     setAudioLevel(level);
     
-    if (isRecording) {
+    if (isRecordingRef.current) {
       animationFrameRef.current = requestAnimationFrame(updateAudioLevel);
     }
-  }, [isRecording]);
+  }, []);
 
   const startRecording = useCallback(async () => {
     if (isRecording) return;
@@ -75,6 +76,7 @@ export function useDeepgram({
       setElapsedSeconds(0);
       setAudioLevel(0);
       audioChunksRef.current = [];
+      isRecordingRef.current = true;
 
       // Get microphone access
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -98,7 +100,7 @@ export function useDeepgram({
       analyserRef.current = analyser;
 
       // Start audio level visualization
-      animationFrameRef.current = requestAnimationFrame(updateAudioLevel);
+      updateAudioLevel();
 
       // Create MediaRecorder
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
@@ -137,6 +139,7 @@ export function useDeepgram({
   const stopRecording = useCallback(async () => {
     if (!isRecording) return;
 
+    isRecordingRef.current = false;
     setIsRecording(false);
     clearIntervals();
 
@@ -224,6 +227,7 @@ export function useDeepgram({
   }, [isRecording, clearIntervals]);
 
   const cleanup = useCallback(async () => {
+    isRecordingRef.current = false;
     clearIntervals();
 
     if (animationFrameRef.current) {
