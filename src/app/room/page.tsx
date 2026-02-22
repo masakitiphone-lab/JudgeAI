@@ -90,8 +90,9 @@ export default function RoomPage() {
 
   const {
     isRecording,
-    interimText,
+    audioLevel,
     elapsedSeconds,
+    isTranscribing,
     error: deepgramError,
     startRecording,
     stopRecording,
@@ -236,7 +237,10 @@ export default function RoomPage() {
           />
         </div>
         <div className="mt-3">
-          <InterimText text={interimText} locale={locale} />
+          <InterimText 
+            text={isTranscribing ? (isJa ? "文字起こし中..." : "Transcribing...") : ""} 
+            locale={locale} 
+          />
         </div>
       </section>
 
@@ -267,6 +271,7 @@ export default function RoomPage() {
         <div className="flex flex-wrap gap-2">
           <RecordButton
             isRecording={isRecording}
+            audioLevel={audioLevel}
             onClick={handleToggleRecording}
             locale={locale}
           />
